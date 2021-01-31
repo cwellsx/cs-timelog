@@ -22,9 +22,13 @@ namespace TimeLog
                 {
                     Weekly = (DayOfWeek)Enum.Parse(typeof(DayOfWeek), payDay);
                 }
+                EveryWeekDay = bool.Parse(settings["EveryWeekDay"]);
+                ShowDayOfWeek = bool.Parse(settings["ShowDayOfWeek"]);
             }
             internal static readonly bool Monthly;
             internal static readonly DayOfWeek? Weekly;
+            internal static readonly bool EveryWeekDay;
+            internal static readonly bool ShowDayOfWeek;
         }
 
         static int i;
@@ -241,11 +245,42 @@ namespace TimeLog
             {
                 TimeSpan rounded = RoundedTimeSpan(timeSpan);
                 string s = TimeSpanToString(rounded);
+
                 swDetails.WriteLine(s);
                 swDetails.WriteLine();
                 swDetails.WriteLine("---");
                 swDetails.WriteLine();
+
+                if (Settings.EveryWeekDay && previousDay.HasValue)
+                {
+                    var saved = currentDay.Value;
+                    for (currentDay = previousDay.Value.AddDays(1); saved.Date != currentDay.Value.Date; currentDay = previousDay.Value.AddDays(1))
+                    {
+                        WriteTotals();
+                        if (currentDay.Value.DayOfWeek != DayOfWeek.Saturday && currentDay.Value.DayOfWeek != DayOfWeek.Sunday)
+                        {
+                            WriteSummary("0");
+                        }
+                        previousDay = currentDay;
+                    }
+                }
+
                 if (previousDay.HasValue)
+                {
+                    WriteTotals();
+                }
+                weeklyTimeSpan += rounded;
+                monthlyTimeSpan += rounded;
+
+                void WriteSummary(string hours)
+                {
+                    string summary = Settings.ShowDayOfWeek
+                        ? string.Format("{0}\t{1}\t{2}", currentDay.Value.DayOfWeek.ToString().Substring(0, 1), currentDay.Value.ToString("yyyy-MM-dd"), hours)
+                        : string.Format("{0}\t{1}", currentDay.Value.ToString("yyyy-MM-dd"), hours);
+                    swSummary.WriteLine(summary);
+                }
+
+                void WriteTotals()
                 {
                     if (IsNewWeek)
                     {
@@ -256,16 +291,13 @@ namespace TimeLog
                         WriteMonthlyTotal(previousDay.Value);
                     }
                 }
-                previousDay = currentDay;
-                weeklyTimeSpan += rounded;
-                monthlyTimeSpan += rounded;
 
-                string summary = string.Format("{0}\t{1}", currentDay.Value.ToString("yyyy-MM-dd"), s);
-                swSummary.WriteLine(summary);
+                WriteSummary(s);
 
                 if (isEndOfFile && monthlyTimeSpan.TotalHours != 0)
                     WriteMonthlyTotal(currentDay.Value);
 
+                previousDay = currentDay;
                 currentDay = null;
                 return timeSpan - rounded;
             }
@@ -284,7 +316,7 @@ namespace TimeLog
             void WriteWeeklyTotal(DateTime weekNow, bool isEndOfWeek)
             {
                 string s = TimeSpanToString(weeklyTimeSpan);
-                string total = string.Format("Week {0} ({1})\t{2}", GetIso8601WeekOfYear(weekNow).ToString("D2"), !isEndOfWeek || isPartialWeek ? "partial" : "total", s);
+                string total = string.Format("Week-{0} ({1})\t{2}", GetIso8601WeekOfYear(weekNow).ToString("D2"), !isEndOfWeek || isPartialWeek ? "part" : "total", s);
                 isPartialWeek = !isEndOfWeek;
                 swSummary.WriteLine(total);
                 weeklyTimeSpan = TimeSpan.Zero;
