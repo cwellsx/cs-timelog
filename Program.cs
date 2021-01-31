@@ -4,77 +4,89 @@ using System.Linq;
 using System.Text;
 
 using System.IO;
+using System.Configuration;
+using System.Globalization;
 
 namespace TimeLog
 {
     class Program
     {
-        static int i;
-        static void Main(string[] args)
+        static class Settings
         {
-            assert(args.Length == 1);
-            string inputPath = args[0];
-            assert(inputPath.EndsWith(".log") && File.Exists(inputPath), inputPath);
-            string summaryPath = inputPath.Replace(".log", ".summary.txt");
-            string detailsPath = inputPath.Replace(".log", ".details.txt");
-            run(inputPath, summaryPath, detailsPath);
-            //string testPath = inputPath.Replace(".log", ".test.log");
-            //run(outputPath, testPath);
-            //assert(File.ReadLines(outputPath).SequenceEqual(File.ReadLines(testPath)));
+            static Settings()
+            {
+                var settings = ConfigurationManager.AppSettings;
+                Monthly = bool.Parse(settings["Monthly"]);
+                var payDay = settings["Weekly"];
+                if (payDay != null)
+                {
+                    Weekly = (DayOfWeek)Enum.Parse(typeof(DayOfWeek), payDay);
+                }
+            }
+            internal static readonly bool Monthly;
+            internal static readonly DayOfWeek? Weekly;
         }
 
-        static void run(string inputPath, string summaryPath, string detailsPath)
+        static int i;
+
+        static void Main(string[] args)
+        {
+            try
+            {
+                Assert(args.Length == 1);
+                string inputPath = args[0];
+                Assert(inputPath.EndsWith(".log") && File.Exists(inputPath));
+                string summaryPath = inputPath.Replace(".log", ".summary.txt");
+                string detailsPath = inputPath.Replace(".log", ".details.txt");
+                Run(inputPath, summaryPath, detailsPath);
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("Exception on line {0}", i);
+            }
+        }
+
+        static void Run(string inputPath, string summaryPath, string detailsPath)
         {
             string[] lines = File.ReadAllLines(inputPath);
-            assert(lines[0] == ".LOG", lines[0]);
-            assert(string.IsNullOrEmpty(lines[1]), lines[1]);
-            //string summaryPath = outputPath.Replace(".log", ".txt");
+            Assert(lines[0] == ".LOG");
+            Assert(string.IsNullOrEmpty(lines[1]));
             using (StreamWriter sw = new StreamWriter(detailsPath, false))
             {
                 using (StreamWriter sw2 = new StreamWriter(summaryPath, false))
                 {
-                    Parser parser = new Parser(sw, sw2, DayOfWeek.Monday, true);
-                    parser.run(lines);
+                    Parser parser = new Parser(sw, sw2);
+                    parser.Run(lines);
                 }
             }
         }
 
         class Parser
         {
-            readonly StreamWriter sw;
-            readonly StreamWriter sw2;
-            readonly DayOfWeek? payDay;
-            readonly bool monthly;
+            readonly StreamWriter swDetails;
+            readonly StreamWriter swSummary;
 
             DateTime? previousDay;
             DateTime? currentDay;
             DateTime previousDateTime;
-            TimeSpan mothlyTimeSpan = TimeSpan.Zero;
+            TimeSpan monthlyTimeSpan = TimeSpan.Zero;
+            TimeSpan weeklyTimeSpan = TimeSpan.Zero;
             DateTime? firstDate;
+            bool isPartialWeek;
 
-            internal Parser(StreamWriter sw, StreamWriter sw2) // monthly
-                : this(sw, sw2, null, true)
+            internal Parser(StreamWriter swDetails, StreamWriter swSummary)
             {
-            }
-            internal Parser(StreamWriter sw, StreamWriter sw2, DayOfWeek payDay) // weekly
-                : this(sw, sw2, payDay, false)
-            {
-            }
-            internal Parser(StreamWriter sw, StreamWriter sw2, DayOfWeek? payDay, bool monthly)
-            {
-                this.sw = sw;
-                this.sw2 = sw2;
-                this.payDay = payDay;
-                this.monthly = monthly;
+                this.swDetails = swDetails;
+                this.swSummary = swSummary;
 
-                sw.AutoFlush = true;
-                sw2.AutoFlush = true;
+                swDetails.AutoFlush = true;
+                swSummary.AutoFlush = true;
             }
 
-            internal void run(string[] lines)
+            internal void Run(string[] lines)
             {
-                sw.WriteLine("LOGGED");
-                sw.WriteLine();
+                swDetails.WriteLine("LOGGED");
+                swDetails.WriteLine();
 
                 // whether we've started a block of times
                 DateTime? startedTime = null;
@@ -82,7 +94,6 @@ namespace TimeLog
                 DateTime? endedTime = null;
                 bool started = false;
                 bool expectBlank = false;
-                bool expectSeparator = false;
                 bool afterBlank = false;
                 bool afterTotal = false;
 
@@ -103,40 +114,23 @@ namespace TimeLog
 
                     if (!startedTime.HasValue)
                     {
-                        // this could be a total
-                        double totalHours;
-                        if (double.TryParse(line, out totalHours))
+                        if (string.IsNullOrEmpty(line))
                         {
-                            //sw.WriteLine(line);
-                            timeSpan = writeTimeSpan(timeSpan, false, false);
-                            expectBlank = true;
-                            expectSeparator = true;
-                            afterTotal = true;
-                        }
-                        else if (string.IsNullOrEmpty(line))
-                        {
-                            assert(expectBlank);
+                            Assert(expectBlank);
                             expectBlank = false;
-                            sw.WriteLine();
+                            swDetails.WriteLine();
                             afterBlank = true;
-                        }
-                        else if (line == "---")
-                        {
-                            assert(expectSeparator);
-                            expectSeparator = false;
-                            sw.WriteLine(line);
-                            expectBlank = true;
                         }
                         else
                         {
                             // expect this to be a starting time
-                            startedTime = parseDateTime(line);
+                            startedTime = ParseDateTime(line);
                             started = true;
 
                             // may be a new day
-                            if (!afterTotal && endedPrevious.HasValue && isNewDay(startedTime.Value, endedPrevious.Value))
+                            if (!afterTotal && endedPrevious.HasValue && IsNewDay(startedTime.Value, endedPrevious.Value))
                             {
-                                timeSpan = writeTimeSpan(timeSpan, true, false);
+                                timeSpan = WriteDailyTotal(timeSpan, false);
                                 afterTotal = true;
                             }
                         }
@@ -144,7 +138,7 @@ namespace TimeLog
                     }
                     if (line == "started")
                     {
-                        assert(started, "line number " + i);
+                        Assert(started);
                         started = false;
                         continue;
                     }
@@ -156,17 +150,17 @@ namespace TimeLog
                         {
                             if (!endedTime.HasValue)
                             {
-                                assert(activities.Count == 0);
+                                Assert(activities.Count == 0);
                                 startedTime = null;
                                 continue;
                             }
                             else
                             {
                                 // we have activities
-                                assert(activities.Count > 0, "line number " + i);
-                                sw.WriteLine(startedTime.Value.ToString(formatDateTime));
-                                activities.ForEach(found => sw.WriteLine(found));
-                                sw.WriteLine(endedTime.Value.ToString(formatDateTime));
+                                Assert(activities.Count > 0);
+                                swDetails.WriteLine(startedTime.Value.ToString(formatDateTime));
+                                activities.ForEach(found => swDetails.WriteLine(found));
+                                swDetails.WriteLine(endedTime.Value.ToString(formatDateTime));
 
                                 endedPrevious = endedTime;
                                 TimeSpan newTimeSpan = endedTime.Value - startedTime.Value;
@@ -185,17 +179,17 @@ namespace TimeLog
                         }
                         else
                         {
-                            assert(false);
+                            Assert(false);
                             //assert(expectBlank);
                             //expectBlank = false;
                         }
-                        sw.WriteLine();
+                        swDetails.WriteLine();
                     }
                     else
                     {
                         if (char.IsDigit(line[0]))
                         {
-                            endedTime = parseDateTime(line);
+                            endedTime = ParseDateTime(line);
                         }
                         else
                         {
@@ -206,82 +200,120 @@ namespace TimeLog
 
                 if (!afterTotal)
                 {
-                    writeTimeSpan(timeSpan, true, true);
+                    WriteDailyTotal(timeSpan, true);
                 }
                 else
                 {
-                    writeMonthlyTotal(previousDay.Value);
+                    WriteMonthlyTotal(previousDay.Value);
                 }
             }
 
-            bool spansPayday
+            bool IsNewMonth
             {
                 get
                 {
-                    assert(currentDay.Value.Date > previousDay.Value.Date);
-                    if (monthly)
-                    {
-                        // paid monthly
-                        if (currentDay.Value.Month != previousDay.Value.Month)
-                            return true;
-                        if (!payDay.HasValue)
-                            return false;
-                    }
-                    // else paid weekly on payDay
+                    Assert(currentDay.Value.Date > previousDay.Value.Date);
+                    return Settings.Monthly && (currentDay.Value.Month != previousDay.Value.Month);
+                }
+            }
+
+            bool IsNewWeek
+            {
+                get
+                {
+                    Assert(currentDay.Value.Date > previousDay.Value.Date);
+                    if (!Settings.Weekly.HasValue)
+                        return false;
                     DateTime previousDate = previousDay.Value.Date;
                     if (previousDate == firstDate.Value)
                         return false;
                     DateTime currentDate = currentDay.Value.Date;
                     for (previousDate = previousDate.AddDays(1); previousDate <= currentDate; previousDate = previousDate.AddDays(1))
                     {
-                        if (previousDate.DayOfWeek == payDay.Value)
+                        if (previousDate.DayOfWeek == Settings.Weekly.Value)
                             return true;
                     }
                     return false;
                 }
             }
 
-            TimeSpan writeTimeSpan(TimeSpan timeSpan, bool appendSeparator, bool appendTotal)
+            TimeSpan WriteDailyTotal(TimeSpan timeSpan, bool isEndOfFile)
             {
-                TimeSpan rounded = roundedTimeSpan(timeSpan);
-                string s = timeSpanToString(rounded);
-                sw.WriteLine(s);
-                if (appendSeparator)
-                {
-                    sw.WriteLine();
-                    sw.WriteLine("---");
-                    sw.WriteLine();
-                }
+                TimeSpan rounded = RoundedTimeSpan(timeSpan);
+                string s = TimeSpanToString(rounded);
+                swDetails.WriteLine(s);
+                swDetails.WriteLine();
+                swDetails.WriteLine("---");
+                swDetails.WriteLine();
                 if (previousDay.HasValue)
                 {
-                    if (spansPayday)
+                    if (IsNewWeek)
                     {
-                        writeMonthlyTotal(previousDay.Value);
+                        WriteWeeklyTotal(previousDay.Value, true);
+                    }
+                    if (IsNewMonth)
+                    {
+                        WriteMonthlyTotal(previousDay.Value);
                     }
                 }
                 previousDay = currentDay;
-                mothlyTimeSpan += rounded;
-                string summary = string.Format("{0}\t{1}", currentDay.Value.ToString("yyyy-MM-dd"), s);
-                sw2.WriteLine(summary);
+                weeklyTimeSpan += rounded;
+                monthlyTimeSpan += rounded;
 
-                if (appendTotal && mothlyTimeSpan.TotalHours != 0)
-                    writeMonthlyTotal(currentDay.Value);
+                string summary = string.Format("{0}\t{1}", currentDay.Value.ToString("yyyy-MM-dd"), s);
+                swSummary.WriteLine(summary);
+
+                if (isEndOfFile && monthlyTimeSpan.TotalHours != 0)
+                    WriteMonthlyTotal(currentDay.Value);
 
                 currentDay = null;
                 return timeSpan - rounded;
             }
 
-            void writeMonthlyTotal(DateTime monthNow)
+            void WriteMonthlyTotal(DateTime monthNow)
             {
-                string s = timeSpanToString(mothlyTimeSpan);
+                if (Settings.Weekly.HasValue && "0" != TimeSpanToString(weeklyTimeSpan))
+                    WriteWeeklyTotal(monthNow, false);
+                string s = TimeSpanToString(monthlyTimeSpan);
                 string total = string.Format("{0} (total)\t{1}", monthNow.ToString("yyyy-MM"), s);
-                sw2.WriteLine(total);
-                mothlyTimeSpan = TimeSpan.Zero;
+                swSummary.WriteLine(total);
+                swSummary.WriteLine();
+                monthlyTimeSpan = TimeSpan.Zero;
             }
 
-            bool isNewDay(DateTime next, DateTime prev)
+            void WriteWeeklyTotal(DateTime weekNow, bool isEndOfWeek)
             {
-                assert(next > prev);
+                string s = TimeSpanToString(weeklyTimeSpan);
+                string total = string.Format("Week {0} ({1})\t{2}", GetIso8601WeekOfYear(weekNow).ToString("D2"), !isEndOfWeek || isPartialWeek ? "partial" : "total", s);
+                isPartialWeek = !isEndOfWeek;
+                swSummary.WriteLine(total);
+                weeklyTimeSpan = TimeSpan.Zero;
+                if (!Settings.Monthly)
+                    swSummary.WriteLine();
+            }
+
+            // https://stackoverflow.com/questions/11154673/get-the-correct-week-number-of-a-given-date
+            public static int GetIso8601WeekOfYear(DateTime time)
+            {
+                // This presumes that weeks start with Monday.
+                // Week 1 is the 1st week of the year with a Thursday in it.
+
+                // Seriously cheat.  If its Monday, Tuesday or Wednesday, then it'll 
+                // be the same week# as whatever Thursday, Friday or Saturday are,
+                // and we always get those right
+                DayOfWeek day = CultureInfo.InvariantCulture.Calendar.GetDayOfWeek(time);
+                if (day >= DayOfWeek.Monday && day <= DayOfWeek.Wednesday)
+                {
+                    time = time.AddDays(3);
+                }
+
+                // Return the week of our adjusted day
+                return CultureInfo.InvariantCulture.Calendar.GetWeekOfYear(time, CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday);
+            }
+
+            bool IsNewDay(DateTime next, DateTime prev)
+            {
+                Assert(next > prev);
                 if (next.Year > prev.Year)
                     return true;
                 if ((next.DayOfYear - prev.DayOfYear) >= 2)
@@ -295,23 +327,23 @@ namespace TimeLog
                 return false;
             }
 
-            static string timeSpanToString(TimeSpan rounded)
+            static string TimeSpanToString(TimeSpan rounded)
             {
-                assert(rounded.Seconds == 0);
-                assert((rounded.Minutes == 0) || (rounded.Minutes == 30));
+                Assert(rounded.Seconds == 0);
+                Assert((rounded.Minutes == 0) || (rounded.Minutes == 30));
                 //assert((int)rounded.TotalHours == rounded.TotalHours);
                 string s = string.Format((rounded.Minutes == 0) ? "{0}" : "{0}.5", (int)rounded.TotalHours);
                 return s;
             }
 
-            static TimeSpan roundedTimeSpan(TimeSpan timeSpan)
+            static TimeSpan RoundedTimeSpan(TimeSpan timeSpan)
             {
-                assert(timeSpan.Days == 0);
+                Assert(timeSpan.Days == 0);
                 if (timeSpan <= TimeSpan.Zero)
                 {
                     return TimeSpan.Zero;
                 }
-                assert((timeSpan.Days == 0) && (timeSpan.Hours <= 18));
+                Assert((timeSpan.Days == 0) && (timeSpan.Hours <= 18));
                 TimeSpan t15 = new TimeSpan(timeSpan.Hours, 15, 0);
                 TimeSpan t45 = new TimeSpan(timeSpan.Hours, 45, 0);
                 if (timeSpan <= t15)
@@ -328,7 +360,7 @@ namespace TimeLog
             static string formatDateTime = "HH:mm yyyy-MM-dd";
             static IFormatProvider provider = null;
 
-            DateTime parseDateTime(string line)
+            DateTime ParseDateTime(string line)
             {
                 DateTime parsed;
                 // handle "21:08 2016-07-26" or "22:23 26/07/2016"
@@ -340,24 +372,17 @@ namespace TimeLog
                 {
                     parsed = DateTime.ParseExact(line, "HH:mm dd/MM/yyyy", provider);
                 }
-                assert(previousDateTime <= parsed, line);
+                Assert(previousDateTime <= parsed);
                 previousDateTime = parsed;
                 return parsed;
             }
         }
 
-        static void assert(bool b, string s = null)
+        static void Assert(bool b)
         {
             if (!b)
             {
-                string line = "Line " + i;
-                if (string.IsNullOrEmpty(s))
-                    line += " -- " + s;
-                throw new Exception(line);
-                //if (!string.IsNullOrEmpty(s))
-                //    throw new Exception(s);
-                //else
-                //    throw new Exception();
+                throw new Exception();
             }
         }
     }

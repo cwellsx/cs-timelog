@@ -1,0 +1,19 @@
+﻿.LOG
+
+11:31 27/11/2018
+started
+11:49 27/11/2018
+email "Is JavaScript arithmetic deterministic?"
+
+13:05 27/11/2018
+started
+13:25 27/11/2018
+email "securitised-options unit test failed"
+13:29 27/11/2018
+run integration tests on securitised-options branch
+
+20:39 27/11/2018
+started
+23:08 27/11/2018
+begin to write LANGUAGE.md
+investigate the API for reading transactions and/or tokens
