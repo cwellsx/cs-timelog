@@ -22,11 +22,13 @@ namespace TimeLog
                 {
                     Weekly = (DayOfWeek)Enum.Parse(typeof(DayOfWeek), payDay);
                 }
+                WeekParts = bool.Parse(settings["WeekParts"]);
                 EveryWeekDay = bool.Parse(settings["EveryWeekDay"]);
                 ShowDayOfWeek = bool.Parse(settings["ShowDayOfWeek"]);
             }
             internal static readonly bool Monthly;
             internal static readonly DayOfWeek? Weekly;
+            internal static readonly bool WeekParts;
             internal static readonly bool EveryWeekDay;
             internal static readonly bool ShowDayOfWeek;
         }
@@ -44,7 +46,7 @@ namespace TimeLog
                 string detailsPath = inputPath.Replace(".log", ".details.txt");
                 Run(inputPath, summaryPath, detailsPath);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 Console.WriteLine("Exception on line {0}", i);
             }
@@ -294,8 +296,13 @@ namespace TimeLog
 
                 WriteSummary(s);
 
-                if (isEndOfFile && monthlyTimeSpan.TotalHours != 0)
-                    WriteMonthlyTotal(currentDay.Value);
+                if (isEndOfFile)
+                {
+                    if (Settings.Weekly.HasValue && weeklyTimeSpan.TotalHours != 0)
+                        WriteWeeklyTotal(currentDay.Value, false);
+                    if (monthlyTimeSpan.TotalHours != 0)
+                        WriteMonthlyTotal(currentDay.Value);
+                }
 
                 previousDay = currentDay;
                 currentDay = null;
@@ -304,7 +311,7 @@ namespace TimeLog
 
             void WriteMonthlyTotal(DateTime monthNow)
             {
-                if (Settings.Weekly.HasValue && "0" != TimeSpanToString(weeklyTimeSpan))
+                if (Settings.Weekly.HasValue && "0" != TimeSpanToString(weeklyTimeSpan) && Settings.WeekParts)
                     WriteWeeklyTotal(monthNow, false);
                 string s = TimeSpanToString(monthlyTimeSpan);
                 string total = string.Format("{0} (total)\t{1}", monthNow.ToString("yyyy-MM"), s);
